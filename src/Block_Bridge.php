@@ -80,7 +80,9 @@ class Block_Bridge {
 			return;
 		}
 
-		if ( ! self::supports_interactivity( $block_type ) ) {
+		$needs_directive_processing = self::supports_interactivity( $block_type ) || self::is_block_renderer_context();
+
+		if ( ! $needs_directive_processing ) {
 			include $render_path;
 			self::reset_state();
 			return;
@@ -324,5 +326,20 @@ class Block_Bridge {
 	public static function is_editor_context(): bool {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only context check
 		return isset( $_REQUEST['context'] ) && 'edit' === $_REQUEST['context'];
+	}
+
+	/**
+	 * Checks if currently in block renderer REST API context.
+	 *
+	 * WordPress uses /wp/v2/block-renderer/ endpoint for editor block previews.
+	 * In this context, interactivity directives must be processed server-side.
+	 *
+	 * @return bool True if in block renderer context, false otherwise.
+	 */
+	public static function is_block_renderer_context(): bool {
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- Only checking for substring, no output.
+		$uri = $_SERVER['REQUEST_URI'] ?? '';
+
+		return false !== strpos( $uri, '/wp/v2/block-renderer/' );
 	}
 }
