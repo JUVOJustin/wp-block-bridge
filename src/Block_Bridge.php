@@ -44,11 +44,10 @@ class Block_Bridge {
 	private static bool $is_bridge_context = false;
 
 	/**
-	 * Renders a block template with its associated assets (scripts, styles).
+	 * Renders a block template for page builders (Bricks, Elementor, etc.).
 	 *
-	 * Enqueues the block's view script modules and includes the render template,
-	 * allowing blocks to be used outside the block editor context.
-	 * Validates context and attributes against the block type definition.
+	 * Enqueues the block's assets and includes the render template.
+	 * Delegates to render() for interactivity directive processing.
 	 *
 	 * @param string               $block_name  Full block name (e.g., 'autoscout-sync/vehicle-equipment').
 	 * @param string               $render_path Absolute path to the block's render.php template.
@@ -73,17 +72,7 @@ class Block_Bridge {
 		self::$current_context    = self::validate_context( $block_type, $context );
 		self::$current_attributes = self::validate_attributes( $block_type, $attributes );
 
-		$content = '';
-
 		if ( ! file_exists( $render_path ) ) {
-			self::reset_state();
-			return;
-		}
-
-		$needs_directive_processing = self::supports_interactivity( $block_type ) || self::is_block_renderer_context();
-
-		if ( ! $needs_directive_processing ) {
-			include $render_path;
 			self::reset_state();
 			return;
 		}
@@ -93,9 +82,89 @@ class Block_Bridge {
 		$html = (string) ob_get_clean();
 
 		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Directives processor returns safe HTML.
-		echo wp_interactivity_process_directives( $html );
+		echo self::render( $block_name, $html );
 
 		self::reset_state();
+	}
+
+	/**
+	 * Processes HTML output for block rendering with interactivity support.
+	 *
+	 * Handles wrapper attributes and directive processing automatically based on
+	 * block configuration and render context.
+	 *
+	 * For interactive blocks:
+	 * - Adds `data-wp-interactive` to root element
+	 * - Wraps with block wrapper attributes in native block context
+	 * - Processes directives in bridge/REST contexts
+	 *
+	 * @param string               $block_name  Full block name (e.g., 'autoscout-sync/vehicle-equipment').
+	 * @param string               $html        The rendered HTML content.
+	 * @param WP_Block|null        $block       Optional WP_Block instance from render.php.
+	 * @param array<string, mixed> $extra_attrs Optional extra attributes for the wrapper div.
+	 * @return string Processed HTML with attributes and directives applied.
+	 */
+	public static function render(
+		string $block_name,
+		string $html,
+		?WP_Block $block = null,
+		array $extra_attrs = array()
+	): string {
+		$block_type       = WP_Block_Type_Registry::get_instance()->get_registered( $block_name );
+		$is_block_context = $block instanceof WP_Block;
+
+		if ( ! $block_type ) {
+			return $html;
+		}
+
+		$has_interactivity = self::supports_interactivity( $block_type );
+
+		// Wrap with block wrapper attributes or add data-wp-interactive to root.
+		$html = self::wrap_with_attributes( $html, $block_name, $is_block_context, $has_interactivity, $extra_attrs );
+
+		// Process directives in bridge or block renderer context.
+		if ( $has_interactivity && ( self::$is_bridge_context || self::is_block_renderer_context() ) ) {
+			return wp_interactivity_process_directives( $html );
+		}
+
+		return $html;
+	}
+
+	/**
+	 * Wraps HTML with a div containing appropriate attributes based on context.
+	 *
+	 * Always wraps content with a div. In block context uses get_block_wrapper_attributes(),
+	 * in bridge context builds attributes manually.
+	 *
+	 * @param string               $html              The HTML content.
+	 * @param string               $block_name        Full block name.
+	 * @param bool                 $is_block_context  Whether in native block context.
+	 * @param bool                 $has_interactivity Whether block supports interactivity.
+	 * @param array<string, mixed> $extra_attrs       Additional attributes for the wrapper.
+	 * @return string HTML wrapped with appropriate attributes.
+	 */
+	private static function wrap_with_attributes(
+		string $html,
+		string $block_name,
+		bool $is_block_context,
+		bool $has_interactivity,
+		array $extra_attrs = array()
+	): string {
+		if ( $has_interactivity ) {
+			$extra_attrs['data-wp-interactive'] = $block_name;
+		}
+
+		if ( $is_block_context ) {
+			$wrapper_attrs = get_block_wrapper_attributes( $extra_attrs );
+		} else {
+			$attrs = array();
+			foreach ( $extra_attrs as $name => $value ) {
+				$attrs[] = esc_attr( $name ) . '="' . esc_attr( $value ) . '"';
+			}
+			$wrapper_attrs = implode( ' ', $attrs );
+		}
+
+		return sprintf( '<div %s>%s</div>', $wrapper_attrs, $html );
 	}
 
 	/**
@@ -342,4 +411,5 @@ class Block_Bridge {
 
 		return false !== strpos( $uri, '/wp/v2/block-renderer/' );
 	}
+
 }
