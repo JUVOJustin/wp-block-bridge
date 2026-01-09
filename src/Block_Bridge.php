@@ -30,6 +30,8 @@ class Block_Bridge {
 
 	/**
 	 * Current render context for bridge rendering.
+	 *
+	 * @var Render_Context|null
 	 */
 	private static ?Render_Context $current_context = null;
 
@@ -44,7 +46,7 @@ class Block_Bridge {
 	 * @return array<string, mixed> The context data array.
 	 */
 	public static function context( ?WP_Block $block = null ): array {
-		if ( self::$current_context !== null ) {
+		if ( null !== self::$current_context ) {
 			return self::$current_context->context;
 		}
 
@@ -66,7 +68,7 @@ class Block_Bridge {
 	 * @return Render_Context|null Current render context or null.
 	 */
 	public static function render_context( ?WP_Block $block = null, array $attributes = array() ): ?Render_Context {
-		if ( self::$current_context !== null ) {
+		if ( null !== self::$current_context ) {
 			return self::$current_context;
 		}
 
@@ -171,7 +173,7 @@ class Block_Bridge {
 	 * @return bool True if in bridge context, false if in native block context.
 	 */
 	public static function is_bridge_context(): bool {
-		return self::$current_context !== null && self::$current_context->is_bridge();
+		return null !== self::$current_context && self::$current_context->is_bridge();
 	}
 
 	/**
@@ -185,7 +187,7 @@ class Block_Bridge {
 	 * @return array<string, mixed> The validated attributes.
 	 */
 	public static function attributes( ?WP_Block $block = null ): array {
-		if ( self::$current_context !== null ) {
+		if ( null !== self::$current_context ) {
 			return self::$current_context->attributes;
 		}
 

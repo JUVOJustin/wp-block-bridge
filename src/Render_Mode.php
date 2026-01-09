@@ -65,6 +65,6 @@ enum Render_Mode: string {
 	 * @return bool True if assets must be enqueued manually.
 	 */
 	public function requires_asset_enqueueing(): bool {
-		return $this === self::BRIDGE;
+		return self::BRIDGE === $this;
 	}
 }

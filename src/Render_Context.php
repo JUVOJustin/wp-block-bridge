@@ -202,7 +202,7 @@ final class Render_Context {
 	 * @return bool True if in bridge context.
 	 */
 	public function is_bridge(): bool {
-		return $this->mode === Render_Mode::BRIDGE;
+		return Render_Mode::BRIDGE === $this->mode;
 	}
 
 	/**
