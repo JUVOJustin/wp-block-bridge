@@ -1,0 +1,51 @@
+{
+  "name": "juvo/wp-block-bridge",
+  "description": "Bridge WordPress blocks to page builders like Bricks and Elementor. Use blocks as the source of truth for styling, scripting, and render logic.",
+  "keywords": ["wordpress", "blocks", "gutenberg", "bricks", "elementor", "page-builder"],
+  "license": "GPL-3.0-or-later",
+  "type": "library",
+  "support": {
+    "issues": "https://github.com/JUVOJustin/wp-block-bridge/issues"
+  },
+  "authors": [
+    {
+      "name": "Justin Vogt",
+      "email": "mail@justin-vogt.de",
+      "homepage": "https://justin-vogt.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "juvo\\WP_Block_Bridge\\": "src/"
+    }
+  },
+  "require": {
+    "php": ">=8.1.0"
+  },
+  "require-dev": {
+    "phpstan/phpstan": "^2.1",
+    "szepeviktor/phpstan-wordpress": "^2.0",
+    "phpstan/extension-installer": "^1.4",
+    "wp-coding-standards/wpcs": "^3.1"
+  },
+  "scripts": {
+    "phpstan": "@php ./vendor/bin/phpstan analyse",
+    "phpstan:ci": "@php ./vendor/bin/phpstan analyse --error-format=checkstyle | cs2pr",
+    "phpcs": "@php ./vendor/bin/phpcs --report-full",
+    "phpcs:ci": "@phpcs --report-checkstyle=./phpcs-report.xml",
+    "phpcbf": "@php ./vendor/bin/phpcbf",
+    "lint": [
+      "@phpstan",
+      "@phpcs"
+    ]
+  },
+  "config": {
+    "platform": {
+      "php": "8.1"
+    },
+    "allow-plugins": {
+      "phpstan/extension-installer": true,
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    }
+  }
+}
