@@ -12,34 +12,10 @@ declare(strict_types=1);
 
 namespace juvo\WP_Block_Bridge\Traits;
 
-use juvo\WP_Block_Bridge\Render_Mode;
-
 /**
  * Detects the current block rendering context.
  */
 trait Detects_Render_Mode {
-
-	/**
-	 * Detects the current render mode from request context.
-	 *
-	 * @param bool $is_bridge Whether explicitly in bridge context.
-	 * @return Render_Mode Detected render mode.
-	 */
-	private static function detect_render_mode( bool $is_bridge = false ): Render_Mode {
-		if ( $is_bridge ) {
-			return Render_Mode::BRIDGE;
-		}
-
-		if ( self::is_editor_context() ) {
-			return Render_Mode::EDITOR;
-		}
-
-		if ( self::is_block_renderer_context() ) {
-			return Render_Mode::REST_API;
-		}
-
-		return Render_Mode::NATIVE;
-	}
 
 	/**
 	 * Checks if currently in block editor SSR context.

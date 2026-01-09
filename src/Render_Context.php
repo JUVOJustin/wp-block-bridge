@@ -2,8 +2,8 @@
 /**
  * Immutable render context for block rendering.
  *
- * Encapsulates all state needed during a block render cycle, supporting
- * nested renders via a context stack managed by Block_Bridge.
+ * Encapsulates all state needed during a block render cycle.
+ * Created by Block_Bridge for bridge contexts or from WP_Block for native contexts.
  *
  * @package juvo\WP_Block_Bridge
  */

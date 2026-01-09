@@ -14,15 +14,14 @@ namespace juvo\WP_Block_Bridge;
 
 use juvo\WP_Block_Bridge\Traits\Detects_Render_Mode;
 use juvo\WP_Block_Bridge\Traits\Wraps_Block_Html;
-use SplStack;
 use WP_Block;
 use WP_Query;
 
 /**
  * Main class for bridging WordPress blocks to page builders.
  *
- * Uses a context stack to support nested block renders while maintaining
- * separate state for each render cycle.
+ * Stores a single render context for the current bridge render cycle.
+ * PHP renders blocks sequentially, so only one context is active at a time.
  */
 class Block_Bridge {
 
@@ -30,29 +29,25 @@ class Block_Bridge {
 	use Wraps_Block_Html;
 
 	/**
-	 * Stack of render contexts for nested render support.
-	 *
-	 * @var SplStack<Render_Context>
+	 * Current render context for bridge rendering.
 	 */
-	private static SplStack $context_stack;
+	private static ?Render_Context $current_context = null;
 
 	/**
 	 * Retrieves block context data for the current render.
 	 *
 	 * Works seamlessly across all rendering contexts:
 	 * - Native Gutenberg: Pass `$block` from render.php
-	 * - Bricks/Elementor: Context from stack (no param needed)
+	 * - Bricks/Elementor: Context stored internally (no param needed)
 	 *
 	 * @param WP_Block|null $block Optional WP_Block instance from render.php.
 	 * @return array<string, mixed> The context data array.
 	 */
 	public static function context( ?WP_Block $block = null ): array {
-		// Bridge context: return from stack.
-		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
-			return self::$context_stack->top()->context;
+		if ( self::$current_context !== null ) {
+			return self::$current_context->context;
 		}
 
-		// Native block context: return from WP_Block.
 		if ( $block instanceof WP_Block ) {
 			return $block->context;
 		}
@@ -71,12 +66,10 @@ class Block_Bridge {
 	 * @return Render_Context|null Current render context or null.
 	 */
 	public static function render_context( ?WP_Block $block = null, array $attributes = array() ): ?Render_Context {
-		// Bridge context: return from stack.
-		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
-			return self::$context_stack->top();
+		if ( self::$current_context !== null ) {
+			return self::$current_context;
 		}
 
-		// Native block context: create from WP_Block.
 		if ( $block instanceof WP_Block ) {
 			return Render_Context::from_block( $block, $attributes );
 		}
@@ -113,21 +106,22 @@ class Block_Bridge {
 			wp_enqueue_script_module( $script_module_id );
 		}
 
-		self::push_context( $ctx );
-
 		if ( ! file_exists( $render_path ) ) {
-			self::pop_context();
 			return;
 		}
 
-		ob_start();
-		include $render_path;
-		$html = (string) ob_get_clean();
+		self::$current_context = $ctx;
 
-		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- render() returns safe HTML.
-		echo self::render( $block_name, $html );
+		try {
+			ob_start();
+			include $render_path;
+			$html = (string) ob_get_clean();
 
-		self::pop_context();
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- render() returns safe HTML.
+			echo self::render( $html );
+		} finally {
+			self::$current_context = null;
+		}
 	}
 
 	/**
@@ -141,19 +135,17 @@ class Block_Bridge {
 	 * - Wraps with block wrapper attributes in native block context
 	 * - Processes directives in bridge/REST contexts
 	 *
-	 * @param string               $block_name  Full block name (e.g., 'autoscout-sync/vehicle-equipment').
 	 * @param string               $html        The rendered HTML content.
 	 * @param WP_Block|null        $block       Optional WP_Block instance from render.php (for native context).
 	 * @param array<string, mixed> $extra_attrs Optional extra attributes for the wrapper div.
 	 * @return string Processed HTML with attributes and directives applied.
 	 */
 	public static function render(
-		string $block_name,
 		string $html,
 		?WP_Block $block = null,
 		array $extra_attrs = array()
 	): string {
-		// Determine context: use existing stack context, or create from native block.
+		// Determine context: use stored bridge context, or create from native block.
 		$ctx = self::render_context( $block );
 
 		if ( ! $ctx ) {
@@ -170,28 +162,6 @@ class Block_Bridge {
 	}
 
 	/**
-	 * Pushes a render context onto the stack.
-	 *
-	 * @param Render_Context $ctx Context to push.
-	 */
-	private static function push_context( Render_Context $ctx ): void {
-		if ( ! isset( self::$context_stack ) ) {
-			self::$context_stack = new SplStack();
-		}
-
-		self::$context_stack->push( $ctx );
-	}
-
-	/**
-	 * Pops the current render context from the stack.
-	 */
-	private static function pop_context(): void {
-		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
-			self::$context_stack->pop();
-		}
-	}
-
-	/**
 	 * Checks if currently rendering via Block_Bridge (page builder context).
 	 *
 	 * Render templates can use this to determine if they're in native block
@@ -201,9 +171,7 @@ class Block_Bridge {
 	 * @return bool True if in bridge context, false if in native block context.
 	 */
 	public static function is_bridge_context(): bool {
-		$ctx = self::render_context();
-
-		return $ctx && $ctx->is_bridge();
+		return self::$current_context !== null && self::$current_context->is_bridge();
 	}
 
 	/**
@@ -211,18 +179,16 @@ class Block_Bridge {
 	 *
 	 * Works seamlessly across all rendering contexts:
 	 * - Native Gutenberg: Pass `$block` from render.php
-	 * - Bricks/Elementor: Attributes from stack (no param needed)
+	 * - Bricks/Elementor: Attributes stored internally (no param needed)
 	 *
 	 * @param WP_Block|null $block Optional WP_Block instance from render.php.
 	 * @return array<string, mixed> The validated attributes.
 	 */
 	public static function attributes( ?WP_Block $block = null ): array {
-		// Bridge context: return from stack.
-		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
-			return self::$context_stack->top()->attributes;
+		if ( self::$current_context !== null ) {
+			return self::$current_context->attributes;
 		}
 
-		// Native block context: return from WP_Block.
 		if ( $block instanceof WP_Block ) {
 			return $block->attributes;
 		}
