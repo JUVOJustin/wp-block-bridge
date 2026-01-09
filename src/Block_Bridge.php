@@ -12,42 +12,83 @@ declare(strict_types=1);
 
 namespace juvo\WP_Block_Bridge;
 
+use juvo\WP_Block_Bridge\Traits\Detects_Render_Mode;
+use juvo\WP_Block_Bridge\Traits\Wraps_Block_Html;
+use SplStack;
 use WP_Block;
-use WP_Block_Type;
-use WP_Block_Type_Registry;
 use WP_Query;
 
 /**
  * Main class for bridging WordPress blocks to page builders.
+ *
+ * Uses a context stack to support nested block renders while maintaining
+ * separate state for each render cycle.
  */
 class Block_Bridge {
 
-	/**
-	 * Stores the current render context for access within render templates.
-	 *
-	 * @var array<string, mixed>
-	 */
-	private static array $current_context = array();
+	use Detects_Render_Mode;
+	use Wraps_Block_Html;
 
 	/**
-	 * Stores the current render attributes for access within render templates.
+	 * Stack of render contexts for nested render support.
 	 *
-	 * @var array<string, mixed>
+	 * @var SplStack<Render_Context>
 	 */
-	private static array $current_attributes = array();
+	private static SplStack $context_stack;
 
 	/**
-	 * Indicates if currently rendering via Block_Bridge (page builder context).
+	 * Retrieves block context data for the current render.
 	 *
-	 * @var bool
+	 * Works seamlessly across all rendering contexts:
+	 * - Native Gutenberg: Pass `$block` from render.php
+	 * - Bricks/Elementor: Context from stack (no param needed)
+	 *
+	 * @param WP_Block|null $block Optional WP_Block instance from render.php.
+	 * @return array<string, mixed> The context data array.
 	 */
-	private static bool $is_bridge_context = false;
+	public static function context( ?WP_Block $block = null ): array {
+		// Bridge context: return from stack.
+		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
+			return self::$context_stack->top()->context;
+		}
+
+		// Native block context: return from WP_Block.
+		if ( $block instanceof WP_Block ) {
+			return $block->context;
+		}
+
+		return array();
+	}
+
+	/**
+	 * Retrieves the full Render_Context object for advanced use cases.
+	 *
+	 * Most render templates should use `context()` instead.
+	 * This method is useful when you need access to mode, attributes, or block_type.
+	 *
+	 * @param WP_Block|null        $block      Optional WP_Block instance.
+	 * @param array<string, mixed> $attributes Optional attributes from render.php.
+	 * @return Render_Context|null Current render context or null.
+	 */
+	public static function render_context( ?WP_Block $block = null, array $attributes = array() ): ?Render_Context {
+		// Bridge context: return from stack.
+		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
+			return self::$context_stack->top();
+		}
+
+		// Native block context: create from WP_Block.
+		if ( $block instanceof WP_Block ) {
+			return Render_Context::from_block( $block, $attributes );
+		}
+
+		return null;
+	}
 
 	/**
 	 * Renders a block template for page builders (Bricks, Elementor, etc.).
 	 *
-	 * Enqueues the block's assets and includes the render template.
-	 * Delegates to render() for interactivity directive processing.
+	 * Enqueues the block's assets, creates a bridge context, includes the render
+	 * template, and processes interactivity directives.
 	 *
 	 * @param string               $block_name  Full block name (e.g., 'autoscout-sync/vehicle-equipment').
 	 * @param string               $render_path Absolute path to the block's render.php template.
@@ -60,20 +101,22 @@ class Block_Bridge {
 		array $context = array(),
 		array $attributes = array()
 	): void {
-		$block_type = WP_Block_Type_Registry::get_instance()->get_registered( $block_name );
+		$ctx = Render_Context::from_bridge( $block_name, $context, $attributes );
 
-		if ( ! $block_type ) {
+		if ( ! $ctx || ! $ctx->block_type ) {
 			return;
 		}
 
-		self::enqueue_block_assets( $block_type );
+		// Enqueue block script module to support interactivity.
+		// Styles and scripts are enqueued globally by gutenberg.
+		foreach ( $ctx->block_type->view_script_module_ids as $script_module_id ) {
+			wp_enqueue_script_module( $script_module_id );
+		}
 
-		self::$is_bridge_context  = true;
-		self::$current_context    = self::validate_context( $block_type, $context );
-		self::$current_attributes = self::validate_attributes( $block_type, $attributes );
+		self::push_context( $ctx );
 
 		if ( ! file_exists( $render_path ) ) {
-			self::reset_state();
+			self::pop_context();
 			return;
 		}
 
@@ -81,17 +124,17 @@ class Block_Bridge {
 		include $render_path;
 		$html = (string) ob_get_clean();
 
-		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Directives processor returns safe HTML.
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- render() returns safe HTML.
 		echo self::render( $block_name, $html );
 
-		self::reset_state();
+		self::pop_context();
 	}
 
 	/**
 	 * Processes HTML output for block rendering with interactivity support.
 	 *
 	 * Handles wrapper attributes and directive processing automatically based on
-	 * block configuration and render context.
+	 * the current render context. Can be called from render.php templates.
 	 *
 	 * For interactive blocks:
 	 * - Adds `data-wp-interactive` to root element
@@ -100,7 +143,7 @@ class Block_Bridge {
 	 *
 	 * @param string               $block_name  Full block name (e.g., 'autoscout-sync/vehicle-equipment').
 	 * @param string               $html        The rendered HTML content.
-	 * @param WP_Block|null        $block       Optional WP_Block instance from render.php.
+	 * @param WP_Block|null        $block       Optional WP_Block instance from render.php (for native context).
 	 * @param array<string, mixed> $extra_attrs Optional extra attributes for the wrapper div.
 	 * @return string Processed HTML with attributes and directives applied.
 	 */
@@ -110,20 +153,16 @@ class Block_Bridge {
 		?WP_Block $block = null,
 		array $extra_attrs = array()
 	): string {
-		$block_type       = WP_Block_Type_Registry::get_instance()->get_registered( $block_name );
-		$is_block_context = $block instanceof WP_Block;
+		// Determine context: use existing stack context, or create from native block.
+		$ctx = self::render_context( $block );
 
-		if ( ! $block_type ) {
+		if ( ! $ctx ) {
 			return $html;
 		}
 
-		$has_interactivity = self::supports_interactivity( $block_type );
+		$html = self::wrap_html( $html, $ctx, $extra_attrs );
 
-		// Wrap with block wrapper attributes or add data-wp-interactive to root.
-		$html = self::wrap_with_attributes( $html, $block_name, $is_block_context, $has_interactivity, $extra_attrs );
-
-		// Process directives in bridge or block renderer context.
-		if ( $has_interactivity && ( self::$is_bridge_context || self::is_block_renderer_context() ) ) {
+		if ( $ctx->requires_directive_processing() ) {
 			return wp_interactivity_process_directives( $html );
 		}
 
@@ -131,49 +170,25 @@ class Block_Bridge {
 	}
 
 	/**
-	 * Wraps HTML with a div containing appropriate attributes based on context.
+	 * Pushes a render context onto the stack.
 	 *
-	 * Always wraps content with a div. In block context uses get_block_wrapper_attributes(),
-	 * in bridge context builds attributes manually.
-	 *
-	 * @param string               $html              The HTML content.
-	 * @param string               $block_name        Full block name.
-	 * @param bool                 $is_block_context  Whether in native block context.
-	 * @param bool                 $has_interactivity Whether block supports interactivity.
-	 * @param array<string, mixed> $extra_attrs       Additional attributes for the wrapper.
-	 * @return string HTML wrapped with appropriate attributes.
+	 * @param Render_Context $ctx Context to push.
 	 */
-	private static function wrap_with_attributes(
-		string $html,
-		string $block_name,
-		bool $is_block_context,
-		bool $has_interactivity,
-		array $extra_attrs = array()
-	): string {
-		if ( $has_interactivity ) {
-			$extra_attrs['data-wp-interactive'] = $block_name;
+	private static function push_context( Render_Context $ctx ): void {
+		if ( ! isset( self::$context_stack ) ) {
+			self::$context_stack = new SplStack();
 		}
 
-		if ( $is_block_context ) {
-			$wrapper_attrs = get_block_wrapper_attributes( $extra_attrs );
-		} else {
-			$attrs = array();
-			foreach ( $extra_attrs as $name => $value ) {
-				$attrs[] = esc_attr( $name ) . '="' . esc_attr( $value ) . '"';
-			}
-			$wrapper_attrs = implode( ' ', $attrs );
-		}
-
-		return sprintf( '<div %s>%s</div>', $wrapper_attrs, $html );
+		self::$context_stack->push( $ctx );
 	}
 
 	/**
-	 * Resets internal state after rendering.
+	 * Pops the current render context from the stack.
 	 */
-	private static function reset_state(): void {
-		self::$is_bridge_context  = false;
-		self::$current_context    = array();
-		self::$current_attributes = array();
+	private static function pop_context(): void {
+		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
+			self::$context_stack->pop();
+		}
 	}
 
 	/**
@@ -186,171 +201,33 @@ class Block_Bridge {
 	 * @return bool True if in bridge context, false if in native block context.
 	 */
 	public static function is_bridge_context(): bool {
-		return self::$is_bridge_context;
+		$ctx = self::render_context();
+
+		return $ctx && $ctx->is_bridge();
 	}
 
 	/**
-	 * Checks if block type supports the Interactivity API.
+	 * Retrieves block attributes for the current render.
 	 *
-	 * @param WP_Block_Type $block_type The block type instance.
-	 * @return bool True if interactivity is supported.
-	 */
-	private static function supports_interactivity( WP_Block_Type $block_type ): bool {
-		$supports = $block_type->supports;
-
-		if ( ! is_array( $supports ) ) {
-			return false;
-		}
-
-		$interactivity = $supports['interactivity'] ?? false;
-
-		return true === $interactivity || is_array( $interactivity );
-	}
-
-	/**
-	 * Enqueues all block assets (script modules, scripts, styles).
-	 *
-	 * @param WP_Block_Type $block_type The block type instance.
-	 */
-	private static function enqueue_block_assets( WP_Block_Type $block_type ): void {
-		foreach ( $block_type->view_script_module_ids as $script_module_id ) {
-			wp_enqueue_script_module( $script_module_id );
-		}
-
-		foreach ( $block_type->view_script_handles as $script_handle ) {
-			wp_enqueue_script( $script_handle );
-		}
-
-		foreach ( $block_type->style_handles as $style_handle ) {
-			wp_enqueue_style( $style_handle );
-		}
-
-		foreach ( $block_type->view_style_handles as $style_handle ) {
-			wp_enqueue_style( $style_handle );
-		}
-	}
-
-	/**
-	 * Validates context against block type's uses_context definition.
-	 *
-	 * Only keeps context keys that the block declares it uses, preventing
-	 * accidental data leakage and ensuring render template compatibility.
-	 *
-	 * @param WP_Block_Type        $block_type The block type instance.
-	 * @param array<string, mixed> $context    Raw context data.
-	 * @return array<string, mixed> Validated context with only allowed keys.
-	 */
-	private static function validate_context( WP_Block_Type $block_type, array $context ): array {
-		$uses_context = $block_type->uses_context ?? array();
-
-		if ( empty( $uses_context ) ) {
-			return array();
-		}
-
-		return array_intersect_key( $context, array_flip( $uses_context ) );
-	}
-
-	/**
-	 * Validates and normalizes attributes against block type's attribute schema.
-	 *
-	 * Applies default values from the schema and casts types appropriately.
-	 * Unknown attributes are stripped for security and consistency.
-	 *
-	 * @param WP_Block_Type        $block_type The block type instance.
-	 * @param array<string, mixed> $attributes Raw attribute data.
-	 * @return array<string, mixed> Validated attributes with defaults applied.
-	 */
-	private static function validate_attributes( WP_Block_Type $block_type, array $attributes ): array {
-		$schema    = $block_type->attributes ?? array();
-		$validated = array();
-
-		foreach ( $schema as $key => $definition ) {
-			if ( array_key_exists( $key, $attributes ) ) {
-				$validated[ $key ] = self::cast_attribute_value( $attributes[ $key ], $definition );
-				continue;
-			}
-
-			if ( array_key_exists( 'default', $definition ) ) {
-				$validated[ $key ] = $definition['default'];
-			}
-		}
-
-		return $validated;
-	}
-
-	/**
-	 * Casts an attribute value to its declared type.
-	 *
-	 * @param mixed                $value      The raw attribute value.
-	 * @param array<string, mixed> $definition The attribute definition from schema.
-	 * @return mixed The type-cast value.
-	 */
-	private static function cast_attribute_value( mixed $value, array $definition ): mixed {
-		$type = $definition['type'] ?? 'string';
-
-		return match ( $type ) {
-			'string'  => (string) $value,
-			'number'  => is_numeric( $value ) ? (float) $value : 0,
-			'integer' => (int) $value,
-			'boolean' => (bool) $value,
-			'array'   => is_array( $value ) ? $value : array(),
-			'object'  => is_array( $value ) || is_object( $value ) ? (array) $value : array(),
-			default   => $value,
-		};
-	}
-
-	/**
-	 * Retrieves the render context, supporting both block and page builder contexts.
-	 *
-	 * When called from render.php, pass the $block variable if available.
-	 * In block context, returns $block->context. Otherwise returns the
-	 * context passed via render_block() for page builder usage.
+	 * Works seamlessly across all rendering contexts:
+	 * - Native Gutenberg: Pass `$block` from render.php
+	 * - Bricks/Elementor: Attributes from stack (no param needed)
 	 *
 	 * @param WP_Block|null $block Optional WP_Block instance from render.php.
-	 * @return array<string, mixed> The context data.
-	 */
-	public static function get_context( ?WP_Block $block = null ): array {
-		if ( $block instanceof WP_Block ) {
-			return $block->context;
-		}
-
-		return self::$current_context;
-	}
-
-	/**
-	 * Retrieves validated attributes for the current render.
-	 *
-	 * In native block context, use the $attributes variable directly from render.php.
-	 * For page builder context, returns attributes validated against the block schema.
-	 *
-	 * @param array<string, mixed>|null $attributes Optional attributes from render.php.
 	 * @return array<string, mixed> The validated attributes.
 	 */
-	public static function get_attributes( ?array $attributes = null ): array {
-		if ( is_array( $attributes ) ) {
-			return $attributes;
+	public static function attributes( ?WP_Block $block = null ): array {
+		// Bridge context: return from stack.
+		if ( isset( self::$context_stack ) && ! self::$context_stack->isEmpty() ) {
+			return self::$context_stack->top()->attributes;
 		}
 
-		return self::$current_attributes;
-	}
-
-	/**
-	 * Resolves the post ID from block context or attributes.
-	 *
-	 * Handles the common pattern of determining which post to render for,
-	 * checking block context first, then attributes, then falling back to current post.
-	 *
-	 * @param bool                 $use_block_context Whether to prioritize block context over attributes.
-	 * @param array<string, mixed> $block_context     Block context array (typically from $block->context).
-	 * @param array<string, mixed> $attributes        Block attributes array.
-	 * @return int The resolved post ID.
-	 */
-	public static function get_post_id( bool $use_block_context = true, array $block_context = array(), array $attributes = array() ): int {
-		if ( $use_block_context ) {
-			return (int) ( $block_context['postId'] ?? get_the_ID() );
+		// Native block context: return from WP_Block.
+		if ( $block instanceof WP_Block ) {
+			return $block->attributes;
 		}
 
-		return (int) ( $attributes['postId'] ?? get_the_ID() );
+		return array();
 	}
 
 	/**
@@ -384,32 +261,4 @@ class Block_Bridge {
 
 		return (int) $query->posts[0];
 	}
-
-	/**
-	 * Checks if currently in block editor SSR context.
-	 *
-	 * WordPress sets the 'context' request parameter during editor server-side rendering.
-	 *
-	 * @return bool True if in editor context, false otherwise.
-	 */
-	public static function is_editor_context(): bool {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only context check
-		return isset( $_REQUEST['context'] ) && 'edit' === $_REQUEST['context'];
-	}
-
-	/**
-	 * Checks if currently in block renderer REST API context.
-	 *
-	 * WordPress uses /wp/v2/block-renderer/ endpoint for editor block previews.
-	 * In this context, interactivity directives must be processed server-side.
-	 *
-	 * @return bool True if in block renderer context, false otherwise.
-	 */
-	public static function is_block_renderer_context(): bool {
-		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- Only checking for substring, no output.
-		$uri = $_SERVER['REQUEST_URI'] ?? '';
-
-		return false !== strpos( $uri, '/wp/v2/block-renderer/' );
-	}
-
 }
