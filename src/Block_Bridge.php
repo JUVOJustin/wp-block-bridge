@@ -117,10 +117,9 @@ class Block_Bridge {
 		try {
 			ob_start();
 			include $render_path;
-			$html = (string) ob_get_clean();
 
-			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- render() returns safe HTML.
-			echo self::render( $html );
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- render.php template is expected to produce safe HTML output.
+			echo ob_get_clean();
 		} finally {
 			self::$current_context = null;
 		}
