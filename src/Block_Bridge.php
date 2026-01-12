@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace juvo\WP_Block_Bridge;
 
 use juvo\WP_Block_Bridge\Traits\Detects_Render_Mode;
+use juvo\WP_Block_Bridge\Traits\Enqueues_Block_Assets;
 use juvo\WP_Block_Bridge\Traits\Wraps_Block_Html;
 use WP_Block;
 use WP_Query;
@@ -26,6 +27,7 @@ use WP_Query;
 class Block_Bridge {
 
 	use Detects_Render_Mode;
+	use Enqueues_Block_Assets;
 	use Wraps_Block_Html;
 
 	/**
@@ -102,11 +104,7 @@ class Block_Bridge {
 			return;
 		}
 
-		// Enqueue block script module to support interactivity.
-		// Styles and scripts are enqueued globally by gutenberg.
-		foreach ( $ctx->block_type->view_script_module_ids as $script_module_id ) {
-			wp_enqueue_script_module( $script_module_id );
-		}
+		self::enqueue_block_frontend_assets( $ctx->block_type );
 
 		if ( ! file_exists( $render_path ) ) {
 			return;
