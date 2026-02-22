@@ -141,15 +141,11 @@ trait Enqueues_Block_Assets {
 	 * @param WP_Block_Type $block_type The block type.
 	 */
 	private static function enqueue_scripts( WP_Block_Type $block_type ): void {
-		foreach ( $block_type->script_handles as $handle ) {
+		foreach ( self::get_block_script_handles( $block_type->name ) as $handle ) {
 			wp_enqueue_script( $handle );
 		}
 
-		foreach ( $block_type->view_script_handles as $handle ) {
-			wp_enqueue_script( $handle );
-		}
-
-		foreach ( $block_type->view_script_module_ids as $module_id ) {
+		foreach ( self::get_block_script_module_ids( $block_type->name ) as $module_id ) {
 			wp_enqueue_script_module( $module_id );
 		}
 	}
@@ -160,11 +156,7 @@ trait Enqueues_Block_Assets {
 	 * @param WP_Block_Type $block_type The block type.
 	 */
 	private static function enqueue_styles( WP_Block_Type $block_type ): void {
-		foreach ( $block_type->style_handles as $handle ) {
-			wp_enqueue_style( $handle );
-		}
-
-		foreach ( $block_type->view_style_handles as $handle ) {
+		foreach ( self::get_block_style_handles( $block_type->name ) as $handle ) {
 			wp_enqueue_style( $handle );
 		}
 	}

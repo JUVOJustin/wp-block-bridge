@@ -1,0 +1,4 @@
+/vendor/
+/composer.lock
+/phpcs-report.xml
+/.phpunit.result.cache
