@@ -16,11 +16,11 @@ WordPress blocks can be rendered in multiple contexts:
 
 Each context has different expectations for when and how JavaScript initializes interactive behavior (sliders, accordions, modals, etc.).
 
-## Why the Interactivity API Is Not the Right Fit
+## Why the Interactivity API Breaks for `ServerSideRender` Blocks
 
 The WordPress [Interactivity API](https://developer.wordpress.org/block-editor/reference-guides/interactivity-api/) (`@wordpress/interactivity`) uses Preact under the hood to manage DOM state via directives like `data-wp-interactive`, `data-wp-on--click`, and `data-wp-context`.
 
-This works well on the **frontend** where the HTML is rendered once and Preact hydrates it. But it breaks in every other context:
+This works well on the **frontend** where the HTML is rendered once and Preact hydrates it. But it breaks when the block uses `ServerSideRender` for its editor preview:
 
 ### Gutenberg Editor (`ServerSideRender`)
 
@@ -34,7 +34,9 @@ As confirmed by the Interactivity API maintainer ([gutenberg#74523](https://gith
 
 ### Page Builders (Bricks, Elementor)
 
-Page builders render blocks outside of the Gutenberg context entirely. The Interactivity API's server-side directive processing (`wp_interactivity_process_directives()`) may not run, and its script modules (`viewScriptModule`) are not automatically enqueued.
+**wp-block-bridge handles page builder rendering**: it automatically enqueues block assets (including `viewScriptModule` ES modules via `wp_enqueue_script_module()`) and calls `wp_interactivity_process_directives()` during rendering. The page builder rendering gap is bridged by this library.
+
+The remaining problem in these contexts is still the Gutenberg editor's `ServerSideRender` component described above — not the page builders themselves.
 
 ### Script Module Limitations in the Editor
 
@@ -73,7 +75,7 @@ Use vanilla JavaScript with a `MutationObserver` pattern for blocks that need in
 
 `script` is the only field that reliably loads in both contexts with current tooling.
 
-> **Note on modules:** `scriptModule` is the correct future-proof field (frontend + editor, ES module format), but as of early 2026, `@wordpress/scripts` does not include `scriptModule` in its entry point detection (`moduleFields` only contains `viewScriptModule` and `viewModule`). Once build tooling catches up, switching from `script` to `scriptModule` will be a single-line change in `block.json`.
+> **Note on modules:** `scriptModule` is the correct future-proof field (frontend + editor, ES module format), but as of early 2026, `@wordpress/scripts` does not include `scriptModule` in its entry point detection — the [`packages/scripts/utils/block-json.js`](https://github.com/WordPress/gutenberg/blob/trunk/packages/scripts/utils/block-json.js) source defines `moduleFields` as only `viewScriptModule` and `viewModule`. Once build tooling catches up, switching from `script` to `scriptModule` will be a single-line change in `block.json`.
 
 ### view.js Pattern
 
@@ -155,12 +157,25 @@ echo Block_Bridge::render( (string) ob_get_clean(), $block ?? null );
 
 ## When the Interactivity API IS Appropriate
 
-The Interactivity API remains the right choice when:
+**The key differentiator is whether the block uses `ServerSideRender` for its editor preview.**
 
-- The block is **frontend-only** (no editor preview needed, no page builder support)
+If your block renders its editor UI with a React `edit.js` component (no `ServerSideRender`), the Interactivity API is the **best choice**:
+
+- The editor renders via React — no `ServerSideRender` re-render cycle that destroys Preact
+- Frontend hydration works exactly as designed
+- You get stores, reactive context, client-side navigation, and cross-block state sharing out of the box
+
+> **Note:** `ServerSideRender` is what makes `render.php` the single source of truth for both the editor preview and the frontend. It is a convenient pattern for complex blocks, but it is the specific scenario that breaks the Interactivity API. For pure Gutenberg blocks that own their editor UI entirely in React, the Interactivity API is the recommended approach.
+
+Use the Interactivity API when:
+
+- The block uses a **React `edit.js`** component for its editor UI (not `ServerSideRender`)
 - The block uses **client-side navigation** (`@wordpress/interactivity-router`)
 - The block needs to **share state** with other Interactivity API blocks on the page
 - You are building a **Full Site Editing** theme where all rendering is Gutenberg-native
+- The block is **frontend-only** (no editor preview needed)
+
+Use vanilla JS + `MutationObserver` (with the `script` field) only when the block relies on `ServerSideRender` for its editor preview — that is the specific scenario where the Interactivity API breaks.
 
 ## Summary
 
@@ -168,8 +183,8 @@ The Interactivity API remains the right choice when:
 |---|---|---|
 | Frontend rendering | Works | Works |
 | Gutenberg editor preview (`ServerSideRender`) | Breaks on re-render | Works (MutationObserver) |
-| Bricks Builder | Not supported | Works (Block_Bridge) |
-| Elementor | Not supported | Works (Block_Bridge) |
+| Bricks Builder | Works (Block_Bridge) | Works (Block_Bridge) |
+| Elementor | Works (Block_Bridge) | Works (Block_Bridge) |
 | REST API consumers | Directives ignored | Plain HTML, consumer adds JS |
 | ES Module format | Required (`viewScriptModule`) | Optional (use `script` or future `scriptModule`) |
 | Shared state across blocks | Built-in stores | Manual (events, globals, or custom) |
