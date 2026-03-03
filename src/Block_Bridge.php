@@ -104,7 +104,7 @@ class Block_Bridge {
 			return;
 		}
 
-		self::enqueue_block_frontend_assets( $ctx->block_type );
+		self::enqueue_block_assets( $block_name );
 
 		if ( ! file_exists( $render_path ) ) {
 			return;

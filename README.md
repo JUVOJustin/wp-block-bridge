@@ -66,6 +66,10 @@ class My_Bricks_Element extends \Bricks\Element {
 use juvo\WP_Block_Bridge\Block_Bridge;
 
 class My_Elementor_Widget extends \Elementor\Widget_Base {
+    public function get_script_depends(): array {
+        return Block_Bridge::get_block_script_depends( 'my-plugin/my-block' );
+    }
+
     protected function render(): void {
         Block_Bridge::render_block(
             'my-plugin/my-block',
@@ -84,5 +88,6 @@ class My_Elementor_Widget extends \Elementor\Widget_Base {
 | `attributes($block)` | Get block attributes array |
 | `render($html, $block)` | Wrap HTML and process directives |
 | `render_block($name, $path, $context, $attrs)` | Full render for page builders |
+| `get_block_script_depends($name)` | Return script handles and preload script modules |
 | `is_bridge_context()` | Check if rendering via page builder |
 | `is_editor_context()` | Check if in block editor SSR |
