@@ -72,6 +72,31 @@ trait Enqueues_Block_Assets {
 	}
 
 	/**
+	 * Returns classic script handles and enqueues script modules for page builders.
+	 *
+	 * Page builder dependency APIs (e.g., Elementor `get_script_depends()`) only
+	 * accept classic handles. If the block also defines `viewScriptModule`, those
+	 * module IDs are enqueued as a side effect so both asset systems are covered.
+	 *
+	 * @param string $block_name Full block name (e.g., 'my-plugin/my-block').
+	 * @return array<string> Script handles for builder dependency arrays.
+	 */
+	public static function get_block_script_depends( string $block_name ): array {
+		$script_handles = self::get_block_script_handles( $block_name );
+		$module_ids     = self::get_block_script_module_ids( $block_name );
+
+		if ( empty( $module_ids ) ) {
+			return $script_handles;
+		}
+
+		foreach ( $module_ids as $module_id ) {
+			wp_enqueue_script_module( $module_id );
+		}
+
+		return $script_handles;
+	}
+
+	/**
 	 * Returns all frontend style handles for a registered block.
 	 *
 	 * Merges handles from `style` (frontend + editor) and `viewStyle` (frontend-only)

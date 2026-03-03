@@ -61,16 +61,28 @@ Because of this:
 
 - `script` / `viewScript` -> can be returned from `get_script_depends()` via `Block_Bridge::get_block_script_handles()`
 - `style` / `viewStyle` -> can be returned from `get_style_depends()` via `Block_Bridge::get_block_style_handles()`
-- `viewScriptModule` -> cannot be returned in `get_script_depends()`; use `Block_Bridge::enqueue_block_assets()` when you need module loading before render
+- `viewScriptModule` -> cannot be returned in `get_script_depends()`; use `Block_Bridge::get_block_script_depends()` (or `enqueue_block_assets()`) when you need module loading before render
 
-### Decision Guide
+### How To Determine If Pre-Render Enqueue Is Needed
 
-| Block asset setup | Builder requirement | Recommended approach |
+Use this practical workflow instead of deciding up front:
+
+1. Start with only `Block_Bridge::render_block()` in your builder widget/element.
+2. Open the builder editor (Elementor/Bricks), add the widget, and hard-refresh once.
+3. If preview works, keep it simple and stop.
+4. If preview fails while frontend works, check browser console + Network tab:
+   - missing classic handle (`script`/`viewScript`) -> declare handles via `get_block_script_handles()`
+   - missing module behavior (`viewScriptModule`) -> call `get_block_script_depends()` or `enqueue_block_assets()` before render
+5. If both are present, use `get_block_script_depends()` in dependency hooks (Elementor) or `enqueue_block_assets()` in enqueue hooks (Bricks).
+
+### Quick Signals (Symptom -> Action)
+
+| Symptom in builder preview | Likely cause | Action |
 |---|---|---|
-| Classic scripts/styles only (`script`, `viewScript`, `style`, `viewStyle`) | Assets needed only when rendering | Rely on `Block_Bridge::render_block()` automatic enqueue |
-| Classic scripts/styles only | Builder wants dependency declaration for preview/optimization | Return handles via `get_block_script_handles()` and `get_block_style_handles()` |
-| Includes `viewScriptModule` | Module can load during render | Rely on `Block_Bridge::render_block()` automatic enqueue |
-| Includes `viewScriptModule` | Module must be present before render | Call `Block_Bridge::enqueue_block_assets()` in builder hook (`get_script_depends()` side effect or `enqueue_scripts()`) |
+| Frontend works, preview JS never starts | Assets loaded too late for preview lifecycle | Preload in builder hook (`get_script_depends()` / `enqueue_scripts()`) |
+| Console shows missing classic global/function | `script` / `viewScript` handle not declared early | Return `get_block_script_handles()` from dependency method |
+| Console shows module-dependent behavior missing | `viewScriptModule` cannot be expressed as handle | Use `get_block_script_depends()` or `enqueue_block_assets()` |
+| No issues in preview or frontend | Automatic enqueue is sufficient | Keep only `render_block()` |
 
 ### Common Scenario: Third-Party Libraries
 
@@ -103,6 +115,17 @@ $handles = Block_Bridge::get_block_script_handles( 'my-plugin/my-block' );
 // e.g., [ 'my-plugin-my-block-script', 'my-plugin-my-block-view-script' ]
 ```
 
+### `Block_Bridge::get_block_script_depends( string $block_name ): array`
+
+Returns classic script handles for builder dependency APIs and enqueues script modules (`viewScriptModule`) as a side effect.
+
+Use this in APIs like Elementor `get_script_depends()` where you must return handles but also need module preload.
+
+```php
+$handles = Block_Bridge::get_block_script_depends( 'my-plugin/my-block' );
+// Returns classic handles and enqueues any module IDs.
+```
+
 ### `Block_Bridge::get_block_style_handles( string $block_name ): array`
 
 Returns all frontend style handles for a block. Merges handles from both `style` and `viewStyle` fields in `block.json`.
@@ -133,16 +156,8 @@ class My_Widget extends \Elementor\Widget_Base {
     private const BLOCK_NAME = 'my-plugin/my-block';
 
     public function get_script_depends(): array {
-        // Classic script handles for Elementor's dependency graph.
-        $handles = Block_Bridge::get_block_script_handles( self::BLOCK_NAME );
-
-        // If the block has viewScriptModule assets and they must be available
-        // before render(), enqueue them here (Elementor cannot declare module IDs).
-        if ( Block_Bridge::get_block_script_module_ids( self::BLOCK_NAME ) ) {
-            Block_Bridge::enqueue_block_assets( self::BLOCK_NAME );
-        }
-
-        return $handles;
+        // Returns classic handles and preloads modules if present.
+        return Block_Bridge::get_block_script_depends( self::BLOCK_NAME );
     }
 
     public function get_style_depends(): array {
@@ -202,8 +217,8 @@ add_action( 'wp_enqueue_scripts', function () {
 | **Gutenberg frontend** | Automatic | WordPress enqueues on `render_block()` |
 | **Gutenberg editor** | Automatic | WordPress enqueues `script`, `editorScript` on block registration |
 | **Block_Bridge::render_block()** | Automatic | Block_Bridge enqueues before including render template |
-| **Elementor editor preview** | Depends | Use handles for classic assets; use `enqueue_block_assets()` when module preload is needed |
+| **Elementor editor preview** | Depends | Use `get_block_script_depends()` + `get_block_style_handles()` when preview needs pre-render assets |
 | **Elementor frontend** | Automatic | `render_block()` enqueues; optional manual declaration for optimization |
 | **Bricks frontend** | Automatic | `render_block()` enqueues during render |
-| **Bricks editor** | Depends | Use `$scripts`/`enqueue_scripts()` for pre-render needs; otherwise render enqueue is enough |
+| **Bricks editor** | Depends | Use `$scripts` for handles and `enqueue_scripts()` + `enqueue_block_assets()` for module preload |
 | **REST API** | Not applicable | Headless consumers manage their own assets |
