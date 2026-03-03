@@ -37,7 +37,7 @@ public function render(): void {
 
 ## Manual Enqueuing
 
-Manual enqueuing is required when the page builder's asset management system needs to know about a block's scripts **before rendering**.
+Manual enqueuing is only required when a page builder must load assets **before** `render()` runs.
 
 ### When Is Manual Enqueuing Needed?
 
@@ -47,7 +47,30 @@ Manual enqueuing is required when the page builder's asset management system nee
 
 **Bricks Builder** uses the `$scripts` property or `enqueue_scripts()` method on the element class for similar purposes.
 
-**If a block's JavaScript initializes itself purely from `render_block()`'s automatic enqueue** (e.g., inline scripts, or scripts that run on DOMContentLoaded), the automatic enqueue is sufficient. But if the page builder's editor preview depends on the script being declared as a dependency, manual registration is required.
+If your widget/element always calls `Block_Bridge::render_block()`, automatic enqueue is usually enough.
+Add manual enqueue only when the builder requires assets earlier than render.
+
+### Classic Handles vs Script Modules
+
+The key difference is **what the builder dependency API can express**:
+
+- `get_script_depends()` / `$scripts` only accept classic script **handles**
+- `viewScriptModule` uses script module **IDs** (`wp_enqueue_script_module()`), not handles
+
+Because of this:
+
+- `script` / `viewScript` -> can be returned from `get_script_depends()` via `Block_Bridge::get_block_script_handles()`
+- `style` / `viewStyle` -> can be returned from `get_style_depends()` via `Block_Bridge::get_block_style_handles()`
+- `viewScriptModule` -> cannot be returned in `get_script_depends()`; use `Block_Bridge::enqueue_block_assets()` when you need module loading before render
+
+### Decision Guide
+
+| Block asset setup | Builder requirement | Recommended approach |
+|---|---|---|
+| Classic scripts/styles only (`script`, `viewScript`, `style`, `viewStyle`) | Assets needed only when rendering | Rely on `Block_Bridge::render_block()` automatic enqueue |
+| Classic scripts/styles only | Builder wants dependency declaration for preview/optimization | Return handles via `get_block_script_handles()` and `get_block_style_handles()` |
+| Includes `viewScriptModule` | Module can load during render | Rely on `Block_Bridge::render_block()` automatic enqueue |
+| Includes `viewScriptModule` | Module must be present before render | Call `Block_Bridge::enqueue_block_assets()` in builder hook (`get_script_depends()` side effect or `enqueue_scripts()`) |
 
 ### Common Scenario: Third-Party Libraries
 
@@ -57,7 +80,7 @@ The most common reason for manual enqueuing is **third-party libraries** that ne
 - Chart.js (charts)
 - Any library that initializes via DOM observation or custom elements
 
-These libraries are typically bundled into the block's `script` or `viewScript` output by webpack. The page builder editor needs to know about the script handle to include it in live previews.
+These libraries are usually bundled into `script`/`viewScript` (classic) or `viewScriptModule` (module). If bundled as classic scripts, declare handles for builder dependency graphs. If bundled as modules, call `enqueue_block_assets()` when preload is required.
 
 ## API Reference
 
@@ -110,7 +133,16 @@ class My_Widget extends \Elementor\Widget_Base {
     private const BLOCK_NAME = 'my-plugin/my-block';
 
     public function get_script_depends(): array {
-        return Block_Bridge::get_block_script_handles( self::BLOCK_NAME );
+        // Classic script handles for Elementor's dependency graph.
+        $handles = Block_Bridge::get_block_script_handles( self::BLOCK_NAME );
+
+        // If the block has viewScriptModule assets and they must be available
+        // before render(), enqueue them here (Elementor cannot declare module IDs).
+        if ( Block_Bridge::get_block_script_module_ids( self::BLOCK_NAME ) ) {
+            Block_Bridge::enqueue_block_assets( self::BLOCK_NAME );
+        }
+
+        return $handles;
     }
 
     public function get_style_depends(): array {
@@ -118,8 +150,7 @@ class My_Widget extends \Elementor\Widget_Base {
     }
 
     protected function render(): void {
-        // render_block() also enqueues assets, but Elementor needs the
-        // handles declared above for its editor preview and optimization.
+        // render_block() enqueues all block assets automatically.
         Block_Bridge::render_block(
             self::BLOCK_NAME,
             PLUGIN_PATH . 'build/Blocks/MyBlock/render.php',
@@ -171,8 +202,8 @@ add_action( 'wp_enqueue_scripts', function () {
 | **Gutenberg frontend** | Automatic | WordPress enqueues on `render_block()` |
 | **Gutenberg editor** | Automatic | WordPress enqueues `script`, `editorScript` on block registration |
 | **Block_Bridge::render_block()** | Automatic | Block_Bridge enqueues before including render template |
-| **Elementor editor preview** | Manual | Declare handles via `get_script_depends()` |
-| **Elementor frontend** | Automatic + Manual | `render_block()` enqueues; handles optimize loading |
+| **Elementor editor preview** | Depends | Use handles for classic assets; use `enqueue_block_assets()` when module preload is needed |
+| **Elementor frontend** | Automatic | `render_block()` enqueues; optional manual declaration for optimization |
 | **Bricks frontend** | Automatic | `render_block()` enqueues during render |
-| **Bricks editor** | Manual | Use `enqueue_scripts()` on the element class |
+| **Bricks editor** | Depends | Use `$scripts`/`enqueue_scripts()` for pre-render needs; otherwise render enqueue is enough |
 | **REST API** | Not applicable | Headless consumers manage their own assets |
